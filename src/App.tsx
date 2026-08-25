@@ -10,6 +10,13 @@ interface SystemInfo {
   total_disk: number;
 }
 
+interface ProcessInfo {
+  process_name: string;
+  cpu_usage: number;
+  memory_used: number;
+  process_id: number;
+}
+
 function formatGiB(bytes: number): string {
   const gib = bytes / (1024 * 1024 * 1024);
   return gib.toFixed(1) + " GB";
@@ -17,12 +24,21 @@ function formatGiB(bytes: number): string {
 
 function App() {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [processInfo, setProcessInfo] = useState<ProcessInfo[] | null>(null);
 
   async function getSystemInfo() {
     try {
       setSystemInfo(await invoke<SystemInfo>("get_system_info"));
     } catch (error) {
       console.error("Failed to connect to the backend", error);
+    }
+  }
+
+  async function getProcessInfo() {
+    try {
+      setProcessInfo(await invoke<ProcessInfo[]>("get_processes_info"));
+    } catch (error) {
+      console.error("Failed to connect ", error);
     }
   }
 
@@ -43,6 +59,17 @@ function App() {
             {formatGiB(systemInfo.total_disk)}
           </p>
         </>
+      )}
+      <button onClick={getProcessInfo}>To Get Data</button>
+      {processInfo === null ? (
+        <p>No process data</p>
+      ) : (
+        processInfo.map((item) => (
+          <p key={item.process_id}>
+            {item.process_name} | PID {item.process_id} | CPU{" "}
+            {item.cpu_usage.toFixed(1)}% | {formatGiB(item.memory_used)}
+          </p>
+        ))
       )}
     </main>
   );
