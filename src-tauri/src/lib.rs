@@ -13,6 +13,14 @@ struct SystemInfo {
     total_disk: u64,
 }
 
+#[derive(Serialize)]
+struct ProcessInfo {
+    process_name: String,
+    cpu_usage: f32,
+    memory_used: u64,
+    process_id: u32,
+}
+
 #[tauri::command] 
 fn get_system_info() -> SystemInfo {
     // we are using this to find the memory(RAM), disk and cpu usage
@@ -52,11 +60,32 @@ fn get_system_info() -> SystemInfo {
     }
 }
 
+#[tauri::command]
+fn get_processes_info() -> Vec<ProcessInfo> {
+    let mut list = Vec::new();
+    let mut sys2 = System::new_all();
+    sys2.refresh_all();
+    sys2.refresh_cpu_usage();
+    std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+    sys2.refresh_cpu_usage();
+
+    for (pid, process) in sys2.processes() {
+        let row = ProcessInfo {
+            process_name: process.name().to_string_lossy().into_owned(),
+            cpu_usage: process.cpu_usage(),
+            memory_used: process.memory(),
+            process_id: pid.as_u32(),
+        };
+        list.push(row);
+    }
+    list
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
     //.plugin(tauri_plugin_opener::init()) -> this is not being used and called here, it can open files/URLs in other apps
-    .invoke_handler(tauri::generate_handler![get_system_info])
+    .invoke_handler(tauri::generate_handler![get_system_info, get_processes_info])
     .run(tauri::generate_context!())
     .expect("Error while running tauri application")
 } 
