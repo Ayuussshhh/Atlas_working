@@ -1,8 +1,12 @@
 use sysinfo::{
     System, Disks,
 };
-
+mod database;
+use database::DB_PATH;
 use serde::Serialize;
+use std::sync::Mutex;
+use tauri::Manager;
+
 #[derive(Serialize)]
 // defined the structure and also that when going to IPC it must be converted to JSON
 struct SystemInfo {
@@ -84,8 +88,14 @@ fn get_processes_info() -> Vec<ProcessInfo> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-    //.plugin(tauri_plugin_opener::init()) -> this is not being used and called here, it can open files/URLs in other apps
+    .setup(|app| {
+        // DB is owned by Rust at boot — React never opens or migrates it.
+        let conn = database::init().expect("failed to initialize database");
+        println!("Database ready at {}", DB_PATH);
+        app.manage(Mutex::new(conn));
+        Ok(())
+    })
     .invoke_handler(tauri::generate_handler![get_system_info, get_processes_info])
     .run(tauri::generate_context!())
     .expect("Error while running tauri application")
-} 
+}
