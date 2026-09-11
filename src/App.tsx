@@ -17,6 +17,15 @@ interface ProcessInfo {
   process_id: number;
 }
 
+interface ActivityEvent {
+  started_at: string;
+  ended_at: string;
+  application: string;
+  window_title: string;
+  path: string;
+  event_type: string;
+}
+
 function formatGiB(bytes: number): string {
   const gib = bytes / (1024 * 1024 * 1024);
   return gib.toFixed(1) + " GB";
@@ -25,6 +34,7 @@ function formatGiB(bytes: number): string {
 function App() {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [processInfo, setProcessInfo] = useState<ProcessInfo[] | null>(null);
+  const [activity, setActivity] = useState<ActivityEvent | null>(null);
 
   async function getSystemInfo() {
     try {
@@ -42,8 +52,27 @@ function App() {
     }
   }
 
+  async function recordActiveWindow() {
+    try {
+      setActivity(await invoke<ActivityEvent>("record_active_window"));
+    } catch (error) {
+      console.error("Failed to record active window", error);
+    }
+  }
+
   return (
     <main className="container">
+      <button onClick={recordActiveWindow}>Record Active Window</button>
+      {activity === null ? (
+        <p>No activity recorded yet</p>
+      ) : (
+        <p>
+          {activity.application} — {activity.window_title}
+          <br />
+          <small>{activity.started_at}</small>
+        </p>
+      )}
+
       <button onClick={getSystemInfo}>Get Diagnostics</button>
       {systemInfo === null ? (
         <p>There is no data</p>

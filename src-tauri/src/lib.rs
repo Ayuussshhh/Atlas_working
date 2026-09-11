@@ -1,11 +1,14 @@
 use sysinfo::{
     System, Disks,
 };
+mod activity;
 mod database;
+use activity::ActivityEvent;
 use database::DB_PATH;
+use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Manager, State};
 
 #[derive(Serialize)]
 // defined the structure and also that when going to IPC it must be converted to JSON
@@ -85,6 +88,22 @@ fn get_processes_info() -> Vec<ProcessInfo> {
     list
 }
 
+/// Read focused window from Windows, INSERT into activity_events, return the event to React.
+/// React never opens SQLite — it only receives the result.
+#[tauri::command]
+fn record_active_window(db: State<'_, Mutex<Connection>>) -> Result<ActivityEvent, String> {
+    let event = activity::get_active_window()?;
+    println!(
+        "Active window: {} | {}",
+        event.application, event.window_title
+    );
+
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    activity::insert_activity_event(&conn, &event).map_err(|e| e.to_string())?;
+
+    Ok(event)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -95,7 +114,11 @@ pub fn run() {
         app.manage(Mutex::new(conn));
         Ok(())
     })
-    .invoke_handler(tauri::generate_handler![get_system_info, get_processes_info])
+    .invoke_handler(tauri::generate_handler![
+        get_system_info,
+        get_processes_info,
+        record_active_window
+    ])
     .run(tauri::generate_context!())
     .expect("Error while running tauri application")
 }
