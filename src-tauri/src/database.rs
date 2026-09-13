@@ -3,18 +3,18 @@ use std::path::Path;
 
 pub const DB_PATH: &str = "database/atlas.db";
 
-/// Open (or create) the SQLite file at `path`.
-/// Creates the parent folder if needed.
 pub fn open_connection(path: &str) -> Result<Connection> {
     if let Some(parent) = Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).expect("failed to create database directory");
         }
     }
-    Connection::open(path)
+    let conn = Connection::open(path)?;
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let _ = conn.pragma_update(None, "busy_timeout", 5000);
+    Ok(conn)
 }
 
-/// Create Atlas tables if they do not exist yet.
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
@@ -49,12 +49,49 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             path TEXT,
             event_type TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS schema_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         ",
     )?;
+
+    let version: String = conn
+        .query_row(
+            "SELECT value FROM schema_meta WHERE key = 'fts_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "0".into());
+
+    if version != "3" {
+        conn.execute_batch(
+            "
+            DROP TABLE IF EXISTS chunks_fts;
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(
+                content,
+                path UNINDEXED,
+                name UNINDEXED,
+                line_start UNINDEXED,
+                line_end UNINDEXED,
+                page_number UNINDEXED,
+                slide_number UNINDEXED,
+                file_type UNINDEXED,
+                tokenize = 'porter unicode61'
+            );
+            ",
+        )?;
+        conn.execute(
+            "INSERT INTO schema_meta(key, value) VALUES('fts_version', '3')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 
-/// Called once at app startup from Rust — React never does this.
 pub fn init() -> Result<Connection> {
     let conn = open_connection(DB_PATH)?;
     migrate(&conn)?;
