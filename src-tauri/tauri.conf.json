@@ -12,11 +12,27 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Atlas",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
         "minHeight": 640
+      },
+      {
+        "label": "spotlight",
+        "title": "Atlas Spotlight",
+        "width": 1000,
+        "height": 620,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "center": true,
+        "focus": false,
+        "shadow": true
       }
     ],
     "security": {

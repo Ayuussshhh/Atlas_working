@@ -41,8 +41,28 @@ interface SearchHit {
   path: string;
   name: string;
   snippet: string;
-  line_start: number;
-  line_end: number;
+  line_start: number | null;
+  line_end: number | null;
+  page_number: number | null;
+  slide_number: number | null;
+  file_type: string;
+  location: string;
+}
+
+interface IndexDoneEvent {
+  ok: boolean;
+  indexed: number;
+  skipped: number;
+  scanned: number;
+  roots: string[];
+  error: string | null;
+}
+
+interface IndexProgress {
+  indexed: number;
+  skipped: number;
+  scanned: number;
+  current_path: string;
 }
 
 type MainTab = "processes" | "library" | "search";
@@ -74,6 +94,29 @@ function formatTime(iso: string): string {
 function percent(used: number, total: number): number {
   if (!total) return 0;
   return Math.min(100, (used / total) * 100);
+}
+
+function highlightSnippet(snippet: string) {
+  const parts = snippet.split(/(⟦|⟧)/);
+  let marked = false;
+  return parts.map((part, i) => {
+    if (part === "⟦") {
+      marked = true;
+      return null;
+    }
+    if (part === "⟧") {
+      marked = false;
+      return null;
+    }
+    if (marked) {
+      return (
+        <mark key={i} className="hit-mark">
+          {part}
+        </mark>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
 }
 
 function loadTone(value: number): "ok" | "warn" | "crit" {
@@ -114,6 +157,7 @@ function App() {
   const [activity, setActivity] = useState<ActivityEvent | null>(null);
   const [history, setHistory] = useState<ActivityEvent[]>([]);
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
+  const [indexRoots, setIndexRoots] = useState<string[]>([]);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -134,25 +178,21 @@ function App() {
 
   async function handleIndex() {
     setIndexing(true);
-    setIndexMessage(null);
+    setIndexMessage(
+      documents.length > 0
+        ? "Checking for new or changed files…"
+        : "Indexing in background… app stays usable",
+    );
     try {
-      const count = await invoke<number>("index_files");
-      setIndexMessage(
-        `Indexed ${count} file${count === 1 ? "" : "s"} (catalog + content)`,
-      );
-      await loadDocuments();
-      if (query.trim()) {
-        await runSearch(query);
-      }
+      await invoke("index_files");
     } catch (error) {
       console.error("Index failed", error);
-      setIndexMessage(error instanceof Error ? error.message : String(error));
-    } finally {
       setIndexing(false);
+      setIndexMessage(error instanceof Error ? error.message : String(error));
     }
   }
 
-  async function runSearch(nextQuery: string) {
+  async function runSearch(nextQuery: string, switchTab = true) {
     const trimmed = nextQuery.trim();
     if (!trimmed) {
       setHits([]);
@@ -162,7 +202,7 @@ function App() {
     try {
       const rows = await invoke<SearchHit[]>("search_files", { query: trimmed });
       setHits(rows);
-      setMainTab("search");
+      if (switchTab) setMainTab("search");
     } catch (error) {
       console.error("Search failed", error);
       setHits([]);
@@ -171,12 +211,19 @@ function App() {
     }
   }
 
-  async function handleOpen(path: string) {
+  async function handleOpen(path: string, pageNumber?: number | null) {
     try {
-      await invoke("open_path", { path });
+      await invoke("open_path", {
+        path,
+        pageNumber: pageNumber ?? null,
+      });
     } catch (error) {
       console.error("Open failed", error);
     }
+  }
+
+  function openSpotlightOverlay() {
+    void invoke("open_spotlight_window");
   }
 
   useEffect(() => {
@@ -209,9 +256,19 @@ function App() {
       }
     }
 
+    async function loadRoots() {
+      try {
+        const roots = await invoke<string[]>("get_index_roots");
+        if (!cancelled) setIndexRoots(roots);
+      } catch (error) {
+        console.error("Failed to load index roots", error);
+      }
+    }
+
     refreshMetrics();
     loadHistory();
     loadDocuments();
+    loadRoots();
 
     const metricsTimer = window.setInterval(refreshMetrics, 2000);
     const clockTimer = window.setInterval(() => setClock(new Date()), 1000);
@@ -221,21 +278,66 @@ function App() {
       setHistory((prev) => [event.payload, ...prev].slice(0, 20));
     });
 
+    const unlistenProgress = listen<IndexProgress>("index-progress", (event) => {
+      setIndexing(true);
+      const { indexed, skipped, scanned, current_path } = event.payload;
+      setIndexMessage(
+        `Updating… ${indexed} new · ${skipped} unchanged · ${scanned} scanned · ${current_path}`,
+      );
+    });
+
+    const unlistenDone = listen<IndexDoneEvent>("index-done", async (event) => {
+      setIndexing(false);
+      if (event.payload.ok) {
+        setIndexRoots(event.payload.roots);
+        const { indexed, skipped, scanned } = event.payload;
+        if (indexed === 0 && skipped > 0) {
+          setIndexMessage(
+            `Up to date — ${skipped} unchanged file${skipped === 1 ? "" : "s"} (scanned ${scanned})`,
+          );
+        } else {
+          setIndexMessage(
+            `${indexed} new/changed · ${skipped} unchanged · ${scanned} scanned (pdf/docx/pptx included)`,
+          );
+        }
+        await loadDocuments();
+      } else {
+        setIndexMessage(event.payload.error ?? "Index failed");
+      }
+    });
+
     return () => {
       cancelled = true;
       window.clearInterval(metricsTimer);
       window.clearInterval(clockTimer);
       unlistenPromise.then((unlisten) => unlisten());
+      unlistenProgress.then((unlisten) => unlisten());
+      unlistenDone.then((unlisten) => unlisten());
     };
   }, []);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      void runSearch(query);
+      void runSearch(query, false);
     }, 280);
     return () => window.clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const isMod = event.ctrlKey || event.metaKey;
+      const kCombo = isMod && event.key.toLowerCase() === "k";
+      const shiftSpace =
+        isMod && event.shiftKey && event.code === "Space";
+      if (kCombo || shiftSpace) {
+        event.preventDefault();
+        openSpotlightOverlay();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const cpu = systemInfo?.cpu_percent ?? 0;
   const ramPct = systemInfo
@@ -250,12 +352,25 @@ function App() {
       <header className="chrome">
         <div className="chrome-brand">
           <span className="mark" aria-hidden />
-          <h1>Atlas</h1>
+          <div>
+            <h1>Atlas</h1>
+            <p className="chrome-tag">Observe · Remember · Find · Navigate</p>
+          </div>
         </div>
         <div className="chrome-meta">
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={openSpotlightOverlay}
+          >
+            Spotlight
+            <kbd>Ctrl</kbd>
+            <kbd>Win</kbd>
+            <kbd>Space</kbd>
+          </button>
           <span className="status">
             <span className="status-dot" />
-            Monitoring
+            Live
           </span>
           <time dateTime={clock.toISOString()}>
             {clock.toLocaleTimeString([], { hour12: false })}
@@ -279,24 +394,23 @@ function App() {
                     <dd>{formatTime(activity.started_at)}</dd>
                   </div>
                   <div>
-                    <dt>Executable</dt>
+                    <dt>Path</dt>
                     <dd title={activity.path}>{activity.path || "—"}</dd>
                   </div>
                 </dl>
               </div>
             ) : (
               <div className="focus-body idle">
-                <p className="focus-app">No external focus</p>
+                <p className="focus-app">Waiting for focus</p>
                 <p className="focus-title">
-                  Atlas excludes itself. Focus another application to begin
-                  tracking.
+                  Switch to another app — Atlas tracks the foreground window.
                 </p>
               </div>
             )}
           </section>
 
           <section className="performance">
-            <div className="section-label">Performance</div>
+            <div className="section-label">Machine</div>
             <Meter label="CPU" valueLabel={`${cpu.toFixed(1)}%`} value={cpu} />
             <Meter
               label="Memory"
@@ -308,7 +422,7 @@ function App() {
               value={ramPct}
             />
             <Meter
-              label="Disk (C:)"
+              label="Disk C:"
               valueLabel={
                 systemInfo
                   ? `${formatGiB(systemInfo.used_disk)} / ${formatGiB(systemInfo.total_disk)}`
@@ -319,9 +433,12 @@ function App() {
           </section>
 
           <section className="index-panel">
-            <div className="section-label">Library</div>
+            <div className="section-label">Remember</div>
             <p className="index-copy">
-              Index stores file cards and searchable text chunks in SQLite.
+              Scans Documents, Desktop, Downloads (and OneDrive). Indexes PDF,
+              DOCX, PPTX, and code. Skips deep project folders. After the first
+              run, only new or changed files are processed. Image-only / scanned
+              files stay findable by name.
             </p>
             <button
               type="button"
@@ -329,17 +446,30 @@ function App() {
               onClick={handleIndex}
               disabled={indexing}
             >
-              {indexing ? "Indexing…" : "Index files"}
+              {indexing
+                ? "Updating in background…"
+                : documents.length > 0
+                  ? "Update index"
+                  : "Index this PC"}
             </button>
             {indexMessage ? <p className="index-status">{indexMessage}</p> : null}
-            <p className="index-meta">{documents.length} documents in database</p>
+            <p className="index-meta">{documents.length} documents remembered</p>
+            {indexRoots.length > 0 ? (
+              <ul className="root-list">
+                {indexRoots.map((root) => (
+                  <li key={root} title={root}>
+                    {root}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </section>
 
           <section className="timeline">
             <div className="section-label">Focus history</div>
             <ol className="timeline-list">
               {history.length === 0 ? (
-                <li className="timeline-empty">Waiting for the first switch…</li>
+                <li className="timeline-empty">No switches yet…</li>
               ) : (
                 history.map((item, index) => {
                   const isCurrent =
@@ -373,7 +503,7 @@ function App() {
                   className={mainTab === "search" ? "tab is-active" : "tab"}
                   onClick={() => setMainTab("search")}
                 >
-                  Search
+                  Find
                 </button>
                 <button
                   type="button"
@@ -391,15 +521,15 @@ function App() {
                   className={mainTab === "library" ? "tab is-active" : "tab"}
                   onClick={() => setMainTab("library")}
                 >
-                  Indexed files
+                  Library
                 </button>
               </div>
               <p>
                 {mainTab === "search"
-                  ? "Find inside indexed file contents · click a hit to open"
+                  ? "Global Spotlight: Ctrl+Win+Space (works while Atlas is in the background)"
                   : mainTab === "processes"
-                    ? "Top consumers by CPU · refreshed live"
-                    : "Documents upserted from the project src folder"}
+                    ? "Top CPU consumers · live sample"
+                    : "Indexed file catalog · click to open"}
               </p>
             </div>
             <span className="count">
@@ -419,8 +549,7 @@ function App() {
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search remembered content…"
-                autoFocus
+                placeholder="Search across indexed files on this PC…"
               />
             </div>
           ) : null}
@@ -429,28 +558,37 @@ function App() {
             {mainTab === "search" ? (
               <ul className="hit-list">
                 {query.trim() === "" ? (
-                  <li className="table-empty hit-empty">
-                    Index files first, then type a word from your code or notes.
+                  <li className="hit-empty">
+                    <div className="empty-state">
+                      <h3>Search your machine</h3>
+                      <p>
+                        Click <strong>Update index</strong> (or Index this PC
+                        once), then press{" "}
+                        <strong>Ctrl+Win+Space</strong> anytime — even when
+                        Atlas is minimized — for Spotlight with file preview.
+                      </p>
+                    </div>
                   </li>
                 ) : hits.length === 0 && !searching ? (
-                  <li className="table-empty hit-empty">
-                    No matches. Re-index if you just changed files.
+                  <li className="hit-empty">
+                    <div className="empty-state">
+                      <h3>No matches</h3>
+                      <p>Try another word, or re-index after adding files.</p>
+                    </div>
                   </li>
                 ) : (
                   hits.map((hit, index) => (
-                    <li key={`${hit.path}-${hit.line_start}-${index}`}>
+                    <li key={`${hit.path}-${hit.location}-${index}`}>
                       <button
                         type="button"
                         className="hit"
-                        onClick={() => handleOpen(hit.path)}
+                        onClick={() => handleOpen(hit.path, hit.page_number)}
                       >
                         <div className="hit-top">
                           <strong>{hit.name}</strong>
-                          <span className="hit-lines">
-                            L{hit.line_start}–{hit.line_end}
-                          </span>
+                          <span className="hit-lines">{hit.location}</span>
                         </div>
-                        <p className="hit-snippet">{hit.snippet}</p>
+                        <p className="hit-snippet">{highlightSnippet(hit.snippet)}</p>
                         <p className="hit-path" title={hit.path}>
                           {hit.path}
                         </p>
@@ -524,7 +662,7 @@ function App() {
                   {documents.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="table-empty">
-                        No documents yet. Use Index files in the sidebar.
+                        No documents yet. Click Index this PC once.
                       </td>
                     </tr>
                   ) : (
