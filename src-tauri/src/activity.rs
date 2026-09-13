@@ -2,6 +2,10 @@ use active_win_pos_rs::get_active_window as os_get_active_window;
 use chrono::Local;
 use rusqlite::{params, Connection, Result as SqlResult};
 use serde::Serialize;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 
 /// One activity row — same shape as activity_events columns (mailbox for OS → DB → React).
 #[derive(Debug, Serialize, Clone)]
@@ -12,6 +16,8 @@ pub struct ActivityEvent {
     pub window_title: String,
     pub path: String,
     pub event_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<u64>,
 }
 
 /// Ask Windows which window has focus. Does NOT touch SQLite.
@@ -20,7 +26,6 @@ pub fn get_active_window() -> Result<ActivityEvent, String> {
         "Could not read the foreground window (none focused, or OS denied access)".to_string()
     })?;
 
-    // active-win-pos-rs already did: foreground HWND → title + process name + exe path
     Ok(ActivityEvent {
         started_at: Local::now().to_rfc3339(),
         ended_at: String::new(),
@@ -28,6 +33,7 @@ pub fn get_active_window() -> Result<ActivityEvent, String> {
         window_title: win.title,
         path: win.process_path.to_string_lossy().into_owned(),
         event_type: "active_window".to_string(),
+        process_id: Some(win.process_id),
     })
 }
 
@@ -47,4 +53,86 @@ pub fn insert_activity_event(conn: &Connection, event: &ActivityEvent) -> SqlRes
         ],
     )?;
     Ok(())
+}
+
+/// Close any open activity rows (empty ended_at) when focus moves.
+pub fn close_open_events(conn: &Connection, ended_at: &str) -> SqlResult<()> {
+    conn.execute(
+        "UPDATE activity_events SET ended_at = ?1
+         WHERE ended_at IS NULL OR ended_at = ''",
+        params![ended_at],
+    )?;
+    Ok(())
+}
+
+pub fn recent_activity(conn: &Connection, limit: i64) -> SqlResult<Vec<ActivityEvent>> {
+    let mut stmt = conn.prepare(
+        "SELECT started_at, ended_at, application, window_title, path, event_type
+         FROM activity_events
+         ORDER BY id DESC
+         LIMIT ?1",
+    )?;
+
+    let rows = stmt.query_map(params![limit], |row| {
+        Ok(ActivityEvent {
+            started_at: row.get(0)?,
+            ended_at: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            application: row.get(2)?,
+            window_title: row.get(3)?,
+            path: row.get(4)?,
+            event_type: row.get(5)?,
+            process_id: None,
+        })
+    })?;
+
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(row?);
+    }
+    Ok(events)
+}
+
+/// Poll the OS in the background. Skips Atlas itself so focus is never "files | files".
+/// Emits `activity-changed` only when the focused *external* window changes.
+pub fn start_tracker(app: AppHandle, db: Arc<Mutex<Connection>>) {
+    let our_pid = std::process::id() as u64;
+
+    thread::spawn(move || {
+        let mut last_fingerprint: Option<(String, String, String)> = None;
+
+        loop {
+            thread::sleep(Duration::from_millis(750));
+
+            let Ok(event) = get_active_window() else {
+                continue;
+            };
+
+            // Atlas is focused — keep showing the last external window; do not overwrite.
+            if event.process_id == Some(our_pid) {
+                continue;
+            }
+
+            let fingerprint = (
+                event.application.clone(),
+                event.window_title.clone(),
+                event.path.clone(),
+            );
+
+            if last_fingerprint.as_ref() == Some(&fingerprint) {
+                continue;
+            }
+
+            let now = Local::now().to_rfc3339();
+            let mut to_emit = event.clone();
+            to_emit.started_at = now.clone();
+
+            if let Ok(conn) = db.lock() {
+                let _ = close_open_events(&conn, &now);
+                let _ = insert_activity_event(&conn, &to_emit);
+            }
+
+            let _ = app.emit("activity-changed", &to_emit);
+            last_fingerprint = Some(fingerprint);
+        }
+    });
 }
