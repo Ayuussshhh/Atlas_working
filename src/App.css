@@ -84,12 +84,12 @@ body::before {
   gap: 12px;
 }
 
-.mark {
-  width: 12px;
-  height: 12px;
-  background: var(--signal);
-  transform: rotate(45deg);
-  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
 }
 
 .chrome-brand h1 {

@@ -351,7 +351,13 @@ function App() {
     <div className="app">
       <header className="chrome">
         <div className="chrome-brand">
-          <span className="mark" aria-hidden />
+          <img
+            className="brand-mark"
+            src="/book.png"
+            alt=""
+            width={28}
+            height={28}
+          />
           <div>
             <h1>Atlas</h1>
             <p className="chrome-tag">Observe · Remember · Find · Navigate</p>
