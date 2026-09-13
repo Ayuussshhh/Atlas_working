@@ -49,6 +49,15 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             path TEXT,
             event_type TEXT
         );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            content,
+            path UNINDEXED,
+            name UNINDEXED,
+            line_start UNINDEXED,
+            line_end UNINDEXED,
+            tokenize = 'porter unicode61'
+        );
         ",
     )?;
     Ok(())

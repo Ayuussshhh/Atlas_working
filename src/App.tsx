@@ -37,7 +37,15 @@ interface DocumentRow {
   hash: string;
 }
 
-type MainTab = "processes" | "library";
+interface SearchHit {
+  path: string;
+  name: string;
+  snippet: string;
+  line_start: number;
+  line_end: number;
+}
+
+type MainTab = "processes" | "library" | "search";
 
 function formatGiB(bytes: number): string {
   const gib = bytes / (1024 * 1024 * 1024);
@@ -106,9 +114,12 @@ function App() {
   const [activity, setActivity] = useState<ActivityEvent | null>(null);
   const [history, setHistory] = useState<ActivityEvent[]>([]);
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
   const [clock, setClock] = useState(() => new Date());
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
-  const [mainTab, setMainTab] = useState<MainTab>("processes");
+  const [mainTab, setMainTab] = useState<MainTab>("search");
   const [indexing, setIndexing] = useState(false);
   const [indexMessage, setIndexMessage] = useState<string | null>(null);
 
@@ -126,14 +137,45 @@ function App() {
     setIndexMessage(null);
     try {
       const count = await invoke<number>("index_files");
-      setIndexMessage(`Indexed ${count} file${count === 1 ? "" : "s"}`);
-      setMainTab("library");
+      setIndexMessage(
+        `Indexed ${count} file${count === 1 ? "" : "s"} (catalog + content)`,
+      );
       await loadDocuments();
+      if (query.trim()) {
+        await runSearch(query);
+      }
     } catch (error) {
       console.error("Index failed", error);
       setIndexMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setIndexing(false);
+    }
+  }
+
+  async function runSearch(nextQuery: string) {
+    const trimmed = nextQuery.trim();
+    if (!trimmed) {
+      setHits([]);
+      return;
+    }
+    setSearching(true);
+    try {
+      const rows = await invoke<SearchHit[]>("search_files", { query: trimmed });
+      setHits(rows);
+      setMainTab("search");
+    } catch (error) {
+      console.error("Search failed", error);
+      setHits([]);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function handleOpen(path: string) {
+    try {
+      await invoke("open_path", { path });
+    } catch (error) {
+      console.error("Open failed", error);
     }
   }
 
@@ -186,6 +228,14 @@ function App() {
       unlistenPromise.then((unlisten) => unlisten());
     };
   }, []);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      void runSearch(query);
+    }, 280);
+    return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
 
   const cpu = systemInfo?.cpu_percent ?? 0;
   const ramPct = systemInfo
@@ -271,7 +321,7 @@ function App() {
           <section className="index-panel">
             <div className="section-label">Library</div>
             <p className="index-copy">
-              Scan project text files and store metadata in SQLite.
+              Index stores file cards and searchable text chunks in SQLite.
             </p>
             <button
               type="button"
@@ -319,6 +369,15 @@ function App() {
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={mainTab === "search"}
+                  className={mainTab === "search" ? "tab is-active" : "tab"}
+                  onClick={() => setMainTab("search")}
+                >
+                  Search
+                </button>
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={mainTab === "processes"}
                   className={mainTab === "processes" ? "tab is-active" : "tab"}
                   onClick={() => setMainTab("processes")}
@@ -336,20 +395,71 @@ function App() {
                 </button>
               </div>
               <p>
-                {mainTab === "processes"
-                  ? "Top consumers by CPU · refreshed live"
-                  : "Documents upserted from the project src folder"}
+                {mainTab === "search"
+                  ? "Find inside indexed file contents · click a hit to open"
+                  : mainTab === "processes"
+                    ? "Top consumers by CPU · refreshed live"
+                    : "Documents upserted from the project src folder"}
               </p>
             </div>
             <span className="count">
-              {mainTab === "processes"
-                ? `${processInfo.length} shown`
-                : `${documents.length} shown`}
+              {mainTab === "search"
+                ? searching
+                  ? "Searching…"
+                  : `${hits.length} hits`
+                : mainTab === "processes"
+                  ? `${processInfo.length} shown`
+                  : `${documents.length} shown`}
             </span>
           </div>
 
+          {mainTab === "search" ? (
+            <div className="search-bar">
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search remembered content…"
+                autoFocus
+              />
+            </div>
+          ) : null}
+
           <div className="table-wrap">
-            {mainTab === "processes" ? (
+            {mainTab === "search" ? (
+              <ul className="hit-list">
+                {query.trim() === "" ? (
+                  <li className="table-empty hit-empty">
+                    Index files first, then type a word from your code or notes.
+                  </li>
+                ) : hits.length === 0 && !searching ? (
+                  <li className="table-empty hit-empty">
+                    No matches. Re-index if you just changed files.
+                  </li>
+                ) : (
+                  hits.map((hit, index) => (
+                    <li key={`${hit.path}-${hit.line_start}-${index}`}>
+                      <button
+                        type="button"
+                        className="hit"
+                        onClick={() => handleOpen(hit.path)}
+                      >
+                        <div className="hit-top">
+                          <strong>{hit.name}</strong>
+                          <span className="hit-lines">
+                            L{hit.line_start}–{hit.line_end}
+                          </span>
+                        </div>
+                        <p className="hit-snippet">{hit.snippet}</p>
+                        <p className="hit-path" title={hit.path}>
+                          {hit.path}
+                        </p>
+                      </button>
+                    </li>
+                  ))
+                )}
+              </ul>
+            ) : mainTab === "processes" ? (
               <table>
                 <thead>
                   <tr>
@@ -419,7 +529,11 @@ function App() {
                     </tr>
                   ) : (
                     documents.map((doc) => (
-                      <tr key={doc.path}>
+                      <tr
+                        key={doc.path}
+                        className="is-clickable"
+                        onClick={() => handleOpen(doc.path)}
+                      >
                         <td className="col-doc-name" title={doc.name}>
                           {doc.name}
                         </td>

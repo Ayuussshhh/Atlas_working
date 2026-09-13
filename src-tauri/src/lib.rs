@@ -1,14 +1,15 @@
 use sysinfo::{Disks, System};
-mod indexer;
 mod activity;
 mod database;
+mod indexer;
 use activity::ActivityEvent;
 use database::DB_PATH;
-use indexer::DocumentsType;
+use indexer::{DocumentsType, SearchHit};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Serialize)]
 struct SystemInfo {
@@ -91,10 +92,8 @@ fn get_recent_activity(db: State<'_, Arc<Mutex<Connection>>>) -> Result<Vec<Acti
     activity::recent_activity(&conn, 12).map_err(|e| e.to_string())
 }
 
-/// Slice 1 prove: list text file paths under a root (no DB writes).
 #[tauri::command]
 fn debug_list_files() -> Result<Vec<String>, String> {
-    // Relative to process cwd (often src-tauri when running tauri dev)
     let paths = indexer::list_text_files("../src")?;
     for p in &paths {
         println!("file: {p}");
@@ -102,12 +101,12 @@ fn debug_list_files() -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-/// Slice 2: walk `../src`, upsert metadata into `documents`, return count.
+/// Catalog + chunk + FTS for project `src` text files.
 #[tauri::command]
 fn index_files(db: State<'_, Arc<Mutex<Connection>>>) -> Result<usize, String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     let count = indexer::index_folder(&conn, "../src")?;
-    println!("Indexed {count} documents");
+    println!("Indexed {count} documents (with content chunks)");
     Ok(count)
 }
 
@@ -117,9 +116,26 @@ fn list_documents(db: State<'_, Arc<Mutex<Connection>>>) -> Result<Vec<Documents
     indexer::list_documents(&conn, 200).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn search_files(
+    db: State<'_, Arc<Mutex<Connection>>>,
+    query: String,
+) -> Result<Vec<SearchHit>, String> {
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    indexer::search(&conn, &query, 40).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let conn = database::init().expect("failed to initialize database");
             println!("Database ready at {}", DB_PATH);
@@ -135,7 +151,9 @@ pub fn run() {
             get_recent_activity,
             debug_list_files,
             index_files,
-            list_documents
+            list_documents,
+            search_files,
+            open_path
         ])
         .run(tauri::generate_context!())
         .expect("Error while running tauri application")
