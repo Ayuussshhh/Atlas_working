@@ -2,7 +2,7 @@
 
 **Observe · Remember · Find · Navigate**
 
-Atlas is a desktop app for your Windows PC that helps you stay aware of what you’re working on, remember the files on your machine, and find them again in seconds — even when you only remember a phrase inside a document, not the file name.
+Atlas is a desktop app for your Windows PC that helps you stay aware of what you’re working on, remember the files on your machine, and find them again in seconds even when you only remember a phrase inside a document, not the file name.
 
 If you’ve ever thought *“I know I wrote this somewhere…”* and then spent ages digging through folders, Atlas is built for that moment.
 
@@ -10,7 +10,7 @@ If you’ve ever thought *“I know I wrote this somewhere…”* and then spent
 
 ## What problem does it solve?
 
-Most of us keep important things in Documents, Desktop, Downloads, or OneDrive — notes, PDFs, presentations, code, and random files. Windows search often only helps if you remember the **file name**. Atlas goes further: it looks **inside** your files, so you can search by the words you actually remember.
+Most of us keep important things in Documents, Desktop, Downloads, or OneDrive:- notes, PDFs, presentations, code, and random files. Windows search often only helps if you remember the **file name**. Atlas goes further: it looks **inside** your files, so you can search by the words you actually remember.
 
 It also quietly keeps track of which app and window you’re using, so you can glance back at what you were focused on, and shows simple live info about how busy your computer is.
 
@@ -28,7 +28,7 @@ It also quietly keeps track of which app and window you’re using, so you can g
 - After the first scan, updates are smarter — Atlas mostly picks up **new or changed** files instead of starting from scratch every time
 
 ### Find
-- Search by a phrase you remember from *inside* a file — not just the name
+- Search by a phrase you remember from *inside* a file, not just the name
 - See helpful snippets so you know why a result matched
 - Open the file from the result (and for PDFs, jump closer to the right page when Atlas knows it)
 
@@ -46,7 +46,7 @@ It also quietly keeps track of which app and window you’re using, so you can g
 ## How do you use it?
 
 1. **Open Atlas**
-2. Click **Index this PC** (later it may say **Update index**) and let it finish in the background — you can keep using the app while it works
+2. Click **Index this PC** (later it may say **Update index**) and let it finish in the background, you can keep using the app while it works
 3. Search from the **Find** tab, or open **Spotlight** anytime
 4. Type a phrase you remember → pick a result → **Open** the file
 5. Optionally check **Active window**, **Focus history**, **Library**, or the machine / process views when you want more context
